@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="デスクHUD">
+<meta name="theme-color" content="#05080d">
+<title>デスクHUD</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;500;600&family=M+PLUS+1+Code:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+/* 層：奥にキャンバスの格子、手前に細い罫線のパネル。
+   上段：時計＋天気｜通学バス　下段：Googleカレンダーの予定｜集中タイマー＋Claude使用量。iPad単体で動く */
+
+/* 層：奥にキャンバスの格子、手前に細い罫線のパネル。
+   上段：時計＋天気｜通学バス　下段：Obsidianのタスク｜集中タイマー＋AI使用量 */
+:root{
+  --void:#05080d;
+  --panel:rgba(12,22,32,.62);
+  --line:#1d3a4a;
+  --ice:#7fe3ff;
+  --ice-dim:#3f8199;
+  --amber:#ffb547;
+  --red:#ff5d6c;
+  --text:#d7eef6;
+  --muted:#6f8f9c;
+  --display:"Chakra Petch", "M PLUS 1 Code", ui-monospace, monospace;
+  --body:"M PLUS 1 Code", "Hiragino Sans", "Noto Sans JP", ui-monospace, monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--void);color:var(--text);font-family:var(--body);font-weight:400;
+  overflow:hidden;-webkit-user-select:none;user-select:none;
+  padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));
+}
+#bg{position:fixed;inset:0;width:100%;height:100%;z-index:0}
+.vignette{position:fixed;inset:0;z-index:1;pointer-events:none;background:radial-gradient(ellipse at 50% 40%,transparent 40%,rgba(0,0,0,.65) 100%)}
+main{
+  position:relative;z-index:2;height:100%;
+  display:grid;gap:10px;
+  grid-template-columns:1.12fr 1fr;
+  grid-template-rows:auto minmax(0,1.08fr) minmax(0,1fr);
+  grid-template-areas:"top top" "clock bus" "cal right";
+}
+.panel{
+  position:relative;background:var(--panel);border:1px solid var(--line);
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+  padding:12px 15px;min-height:0;
+  clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px));
+}
+.panel::before{content:"";position:absolute;top:0;left:0;width:42px;height:2px;background:var(--ice)}
+.label{font-family:var(--display);font-size:11px;letter-spacing:.26em;color:var(--ice-dim);text-transform:uppercase;display:flex;justify-content:space-between;gap:12px;flex:none}
+.label b{font-weight:500;color:var(--muted);letter-spacing:.08em;text-transform:none;font-family:var(--body)}
+.num{font-family:var(--display);font-variant-numeric:tabular-nums}
+
+.top{grid-area:top;display:flex;align-items:center;justify-content:space-between;gap:16px;font-family:var(--display);font-size:12px;letter-spacing:.22em;color:var(--muted)}
+.top .id{color:var(--ice)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ice);margin-right:8px;box-shadow:0 0 10px var(--ice);animation:pulse 2.4s ease-in-out infinite}
+.dot.off{background:var(--red);box-shadow:0 0 10px var(--red)}
+@keyframes pulse{50%{opacity:.25}}
+.top button{font:inherit;letter-spacing:.18em;color:var(--ice);background:transparent;border:1px solid var(--line);padding:5px 12px;cursor:pointer}
+.top button:hover,.top button:focus-visible{border-color:var(--ice);outline:none}
+
+/* clock + weather */
+.clock{grid-area:clock;display:flex;flex-direction:column;justify-content:space-between;gap:8px}
+.timeRow{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.time{font-family:var(--display);font-weight:300;line-height:.88;display:flex;align-items:flex-start;gap:.06em;
+  font-size:clamp(56px,9.2vw,132px);font-variant-numeric:tabular-nums;text-shadow:0 0 28px rgba(127,227,255,.35)}
+.time .sec{font-size:.32em;color:var(--ice);margin-top:.16em;margin-left:.2em;font-weight:500}
+.time .colon{color:var(--ice-dim);animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:.2}}
+.date{display:flex;flex-direction:column;gap:2px;font-family:var(--display);letter-spacing:.1em;text-align:right;padding-bottom:4px}
+.date .ymd{font-size:clamp(17px,2.1vw,24px);font-weight:500}
+.date .wd{color:var(--amber);font-size:14px}
+.date .jp{font-family:var(--body);font-size:12px;color:var(--muted);letter-spacing:.04em}
+.meters{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
+.meter .row{display:flex;justify-content:space-between;font-family:var(--display);font-size:11px;letter-spacing:.2em;color:var(--muted);margin-bottom:5px;font-variant-numeric:tabular-nums}
+.meter .row span:last-child{color:var(--text)}
+.bar{height:6px;background:repeating-linear-gradient(90deg,#10232e 0 6px,transparent 6px 8px);position:relative}
+.bar i{position:absolute;inset:0 auto 0 0;background:repeating-linear-gradient(90deg,var(--c,var(--ice)) 0 6px,transparent 6px 8px);box-shadow:0 0 8px color-mix(in srgb,var(--c,var(--ice)) 60%,transparent);transition:width .6s}
+
+.wx{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;align-items:center;border-top:1px dashed #15303d;padding-top:8px}
+.wxNow{display:flex;align-items:baseline;gap:10px}
+.wxNow .t{font-family:var(--display);font-size:38px;font-weight:500;line-height:1;font-variant-numeric:tabular-nums}
+.wxNow .t small{font-size:.45em;color:var(--muted);margin-left:2px}
+.wxNow .desc{display:flex;flex-direction:column;gap:2px;font-size:13px}
+.wxNow .desc span:first-child{color:var(--ice)}
+.wxNow .desc span:last-child{color:var(--muted);font-size:11.5px}
+.wxDay{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--muted);justify-content:flex-end}
+.wxDay b{font-family:var(--display);font-weight:500;color:var(--text);font-variant-numeric:tabular-nums}
+.wxDay .hi{color:var(--amber)} .wxDay .lo{color:var(--ice)}
+.wxDay .rain b{color:var(--ice)}
+.wxDay .rain.wet b{color:var(--amber)}
+.hours{grid-column:1/-1;display:grid;grid-template-columns:repeat(12,1fr);gap:4px;align-items:end}
+.hours .h{display:flex;flex-direction:column;align-items:center;gap:3px;font-variant-numeric:tabular-nums}
+.hours .pop{width:100%;height:30px;background:#0d1d26;position:relative}
+.hours .pop i{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(var(--ice),rgba(127,227,255,.25))}
+.hours .pop i.wet{background:linear-gradient(var(--amber),rgba(255,181,71,.25))}
+.hours .pv{font-family:var(--display);font-size:10px;color:var(--muted)}
+.hours .tv{font-family:var(--display);font-size:11px;color:var(--text)}
+.hours .hl{font-family:var(--display);font-size:10px;color:var(--ice-dim)}
+.wxErr{grid-column:1/-1;font-size:12px;color:var(--amber)}
+.wxErr:empty{display:none}
+
+/* bus */
+.bus{grid-area:bus;display:flex;flex-direction:column;gap:8px}
+.next{display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:end;padding:4px 0 8px;border-bottom:1px dashed #15303d}
+.next .when{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.next .dep{font-family:var(--display);font-size:clamp(34px,4.4vw,50px);font-weight:500;line-height:1;font-variant-numeric:tabular-nums}
+.next .cd{text-align:right}
+.next .cd .big{font-family:var(--display);font-size:clamp(28px,3.6vw,40px);font-weight:500;line-height:1;color:var(--c,var(--ice));font-variant-numeric:tabular-nums;text-shadow:0 0 14px color-mix(in srgb,var(--c,var(--ice)) 45%,transparent)}
+.next .cd .sm{font-size:12px;color:var(--muted);margin-top:4px}
+.next .cd .sm b{color:var(--text);font-family:var(--display);font-weight:500}
+.chain{grid-column:1/-1;display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+.chain b{font-family:var(--display);font-weight:500;color:var(--text);font-variant-numeric:tabular-nums}
+.chain .arrow{color:var(--ice-dim)}
+.chain .goal b{color:var(--ice)}
+.line{display:inline-block;font-family:var(--display);font-size:11px;font-weight:600;letter-spacing:.06em;padding:1px 6px;border:1px solid var(--ice-dim);color:var(--ice);min-width:28px;text-align:center}
+.line.l39{border-color:#7a6a3f;color:var(--amber)}
+.line.l16{border-color:#4b5f86;color:#a9c2ff}
+.tag{font-size:10.5px;color:var(--amber);border:1px dashed currentColor;padding:0 5px}
+.trips{list-style:none;display:flex;flex-direction:column;gap:2px;min-height:0;overflow:hidden}
+.trips li{display:grid;grid-template-columns:52px 34px 1fr auto;gap:8px;align-items:center;font-size:12.5px;padding:4px 0;border-bottom:1px solid #102430;color:var(--muted)}
+.trips li .d{font-family:var(--display);font-size:16px;font-weight:500;color:var(--text);font-variant-numeric:tabular-nums}
+.trips li .r b{font-family:var(--display);color:var(--text);font-weight:500}
+.trips li .a{text-align:right;font-variant-numeric:tabular-nums}
+.trips li .a b{font-family:var(--display);font-weight:500;color:var(--ice)}
+.leg2{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:auto;padding-top:6px;border-top:1px dashed #15303d}
+.leg2 b{font-family:var(--display);font-weight:500;color:var(--text);font-size:15px;font-variant-numeric:tabular-nums}
+.busEmpty{color:var(--muted);font-size:13px;line-height:1.7;padding:6px 0}
+
+/* right: timer + usage */
+.right{grid-area:right;display:grid;grid-template-columns:1fr 1fr;gap:10px;min-height:0}
+.usage{display:flex;flex-direction:column;gap:10px}
+.uRow .head{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.uRow .name{font-family:var(--display);font-size:12px;letter-spacing:.2em;color:var(--muted)}
+.uRow .pct{font-family:var(--display);font-size:28px;font-weight:500;font-variant-numeric:tabular-nums;color:var(--c,var(--ice));text-shadow:0 0 14px color-mix(in srgb,var(--c,var(--ice)) 45%,transparent)}
+.uRow .pct small{font-size:.5em;margin-left:2px}
+.uRow .bar{height:10px;margin:3px 0 5px}
+.uRow .pace{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--text);opacity:.75;transition:left .6s}
+.uRow .sub{display:flex;justify-content:space-between;gap:6px;font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;flex-wrap:wrap}
+.uRow .sub span:last-child{color:var(--text)}
+.uNote{font-size:11px;color:var(--amber);line-height:1.5}
+.uNote:empty{display:none}
+
+
+.timer{display:flex;flex-direction:column;align-items:center;gap:8px}
+.timer .label{align-self:stretch}
+.ring{position:relative;flex:1;min-height:0;width:100%;display:grid;place-items:center}
+.ring svg{height:100%;max-height:210px;width:auto;max-width:100%;aspect-ratio:1;overflow:visible}
+.ring .track{fill:none;stroke:#11262f;stroke-width:6}
+.ring .ticks{fill:none;stroke:var(--line);stroke-width:10;stroke-dasharray:1 7.38}
+.ring .prog{fill:none;stroke:var(--ice);stroke-width:6;transform:rotate(-90deg);transform-origin:50% 50%;filter:drop-shadow(0 0 6px rgba(127,227,255,.7));transition:stroke-dashoffset .4s linear}
+.timer.break .ring .prog{stroke:var(--amber);filter:drop-shadow(0 0 6px rgba(255,181,71,.7))}
+.ring .readout{position:absolute;text-align:center;font-variant-numeric:tabular-nums}
+.ring .remain{font-family:var(--display);font-size:clamp(28px,3.4vw,40px);font-weight:500;letter-spacing:.04em}
+.ring .mode{font-family:var(--display);font-size:11px;letter-spacing:.3em;color:var(--ice)}
+.timer.break .ring .mode{color:var(--amber)}
+.ring .count{font-size:11px;color:var(--muted);margin-top:3px}
+.controls{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+.btn{font-family:var(--display);font-size:12px;letter-spacing:.14em;color:var(--text);background:rgba(127,227,255,.04);border:1px solid var(--line);padding:7px 11px;cursor:pointer}
+.btn:hover,.btn:focus-visible{border-color:var(--ice);color:var(--ice);outline:none}
+.btn.primary{border-color:var(--ice);color:var(--void);background:var(--ice);font-weight:600}
+.btn.primary:hover,.btn.primary:focus-visible{color:var(--void);box-shadow:0 0 14px rgba(127,227,255,.6)}
+
+.flash{position:fixed;inset:0;z-index:5;pointer-events:none;background:radial-gradient(circle,rgba(127,227,255,.25),transparent 70%);opacity:0;transition:opacity .6s}
+.flash.go{opacity:1}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:6;background:#1a0d12;border:1px solid var(--red);color:var(--text);padding:10px 16px;font-size:13px;max-width:90vw;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.go{opacity:1}
+
+@media (orientation:portrait), (max-width:860px){
+  body{overflow-y:auto}
+  main{height:auto;min-height:100%;grid-template-columns:1fr;grid-template-rows:auto;grid-template-areas:"top" "clock" "bus" "cal" "right"}
+  .cal ul{max-height:50vh}
+  .ring{min-height:200px}
+}
+@media (max-width:560px){ .right{grid-template-columns:1fr} }
+@media (prefers-reduced-motion:reduce){*,*::before{animation:none!important;transition:none!important}}
+
+/* calendar */
+.cal{grid-area:cal;display:flex;flex-direction:column;gap:8px}
+.focusEv{display:grid;grid-template-columns:1fr auto;gap:2px 12px;align-items:end;padding-bottom:8px;border-bottom:1px dashed #15303d}
+.focusEv .k{grid-column:1/-1;font-family:var(--display);font-size:11px;letter-spacing:.24em;color:var(--amber)}
+.focusEv .k.now{color:var(--ice)}
+.focusEv .ti{font-size:19px;line-height:1.3;overflow-wrap:anywhere}
+.focusEv .wh{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.focusEv .wh b{font-family:var(--display);font-weight:500;color:var(--text)}
+.focusEv .cd{grid-row:2/4;grid-column:2;text-align:right;font-family:var(--display);font-size:clamp(24px,3vw,34px);font-weight:500;color:var(--c,var(--ice));font-variant-numeric:tabular-nums;text-shadow:0 0 14px color-mix(in srgb,var(--c,var(--ice)) 45%,transparent)}
+.focusEv .cd small{display:block;font-family:var(--body);font-size:11px;color:var(--muted);font-weight:400;text-shadow:none}
+.focusEv .prog{grid-column:1/-1;margin-top:6px}
+.allday{display:flex;gap:6px;flex-wrap:wrap}
+.allday span{font-size:11.5px;padding:2px 8px;border:1px solid var(--line);color:var(--text);border-left:3px solid var(--ec,var(--ice-dim))}
+.evs{list-style:none;display:flex;flex-direction:column;overflow-y:auto;min-height:0;flex:1;-webkit-overflow-scrolling:touch}
+.evs li{display:grid;grid-template-columns:112px 1fr;gap:10px;align-items:baseline;padding:6px 2px;border-bottom:1px solid #102430;font-size:14px}
+.evs li .tm{white-space:nowrap;font-family:var(--display);font-size:13px;color:var(--text);font-variant-numeric:tabular-nums;border-left:3px solid var(--ec,var(--ice-dim));padding-left:8px}
+.evs li .bd{display:flex;flex-direction:column;gap:1px;min-width:0}
+.evs li .bd span:first-child{overflow-wrap:anywhere}
+.evs li .bd small{font-size:11px;color:var(--muted)}
+.evs li.past{opacity:.38}
+.evs li.cur .tm{color:var(--ice)}
+.evs li.sep{display:block;padding:8px 2px 2px;border:none;font-family:var(--display);font-size:11px;letter-spacing:.24em;color:var(--ice-dim)}
+.calEmpty{color:var(--muted);font-size:13px;line-height:1.7;padding:6px 2px}
+.calEmpty button{margin-top:8px}
+
+/* settings dialog */
+.sheet{position:fixed;inset:0;z-index:8;display:none;place-items:center;background:rgba(2,5,9,.72);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+.sheet.open{display:grid}
+.sheet form{width:min(520px,92vw);background:#08121a;border:1px solid var(--ice-dim);padding:20px;display:flex;flex-direction:column;gap:12px;-webkit-user-select:text;user-select:text}
+.sheet h2{font-family:var(--display);font-size:14px;letter-spacing:.24em;color:var(--ice);font-weight:500}
+.sheet label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--muted)}
+.sheet input{background:transparent;border:1px solid var(--line);color:var(--text);font:inherit;font-size:15px;padding:8px 10px}
+.sheet input:focus{outline:none;border-color:var(--ice)}
+.sheet .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sheet .acts{display:flex;justify-content:flex-end;gap:8px}
+.sheet p{font-size:12px;color:var(--muted);line-height:1.6}
+.top .tb{display:flex;gap:8px}
+
+</style>
+</head>
+<body>
+<canvas id="bg" aria-hidden="true"></canvas>
+<div class="vignette"></div>
+<div class="flash" id="flash"></div>
+<div class="toast" id="toast" role="status"></div>
+<main>
+  <header class="top">
+    <div><span class="dot" id="link"></span><span class="id">DESK-HUD</span> / <span id="linkTxt">起動中</span> <span id="uptime">00:00:00</span></div>
+    <div class="tb"><button id="setBtn" type="button">設定</button><button id="fs" type="button">全画面</button></div>
+  </header>
+
+  <section class="panel clock" aria-label="時計と天気">
+    <div class="label"><span>Local Time</span><b id="tz">UTC+09:00</b></div>
+    <div class="timeRow">
+      <div class="time"><span id="hh">--</span><span class="colon">:</span><span id="mm">--</span><span class="sec" id="ss">--</span></div>
+      <div class="date"><span class="ymd" id="ymd">----.--.--</span><span class="wd" id="wd">---</span><span class="jp" id="jp"></span></div>
+    </div>
+    <div class="meters">
+      <div class="meter"><div class="row"><span>今日</span><span id="dayP">0%</span></div><div class="bar"><i id="dayB"></i></div></div>
+      <div class="meter"><div class="row"><span>今週</span><span id="weekP">0%</span></div><div class="bar"><i id="weekB"></i></div></div>
+    </div>
+    <div class="wx" aria-label="天気">
+      <div class="wxNow"><span class="t" id="wxT">--<small>°C</small></span><span class="desc"><span id="wxD">天気を取得中</span><span id="wxF"></span></span></div>
+      <div class="wxDay" id="wxDay"></div>
+      <div class="hours" id="hours"></div>
+      <div class="wxErr" id="wxErr"></div>
+    </div>
+  </section>
+
+  <section class="panel bus" aria-label="通学バス">
+    <div class="label"><span>Transit · 赤塚山 → 国際文化学研究科前</span><b id="busDay">—</b></div>
+    <div id="busBody"><div class="busEmpty">時刻表を読み込み中…</div></div>
+    <div class="leg2" id="leg2"></div>
+  </section>
+
+  <section class="panel cal" aria-label="Googleカレンダーの予定">
+    <div class="label"><span>Schedule · Google Calendar</span><b id="calSrc">—</b></div>
+    <div id="calFocus"></div>
+    <div class="allday" id="allday"></div>
+    <ul class="evs" id="evs"></ul>
+  </section>
+
+  <div class="right">
+    <section class="panel timer" id="timer" aria-label="集中タイマー">
+      <div class="label"><span>Focus</span><b>25 / 5</b></div>
+      <div class="ring">
+        <svg viewBox="0 0 220 220" role="img" aria-label="残り時間のリング">
+          <circle class="ticks" cx="110" cy="110" r="100"/>
+          <circle class="track" cx="110" cy="110" r="86"/>
+          <circle class="prog" id="prog" cx="110" cy="110" r="86"/>
+        </svg>
+        <div class="readout">
+          <div class="mode" id="mode">FOCUS</div>
+          <div class="remain" id="remain">25:00</div>
+          <div class="count" id="count">今日 0 回</div>
+        </div>
+      </div>
+      <div class="controls">
+        <button class="btn primary" id="startBtn" type="button">開始</button>
+        <button class="btn" id="resetBtn" type="button">リセット</button>
+        <button class="btn" id="skipBtn" type="button">次へ</button>
+      </div>
+    </section>
+
+    <section class="panel usage" aria-label="Claudeの使用量">
+      <div class="label"><span>Claude</span><b id="uSrc">—</b></div>
+      <div class="uRow" id="u5">
+        <div class="head"><span class="name">5時間枠</span><span class="pct">--<small>%</small></span></div>
+        <div class="bar"><i></i><span class="pace" hidden></span></div>
+        <div class="sub"><span class="reset">リセット --:--</span><span class="left">--</span></div>
+      </div>
+      <div class="uRow" id="u7">
+        <div class="head"><span class="name">週間枠</span><span class="pct">--<small>%</small></span></div>
+        <div class="bar"><i></i><span class="pace" hidden></span></div>
+        <div class="sub"><span class="reset">リセット --</span><span class="left">--</span></div>
+      </div>
+      <div class="uNote" id="uNote"></div>
+    </section>
+  </div>
+</main>
+
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <form id="setForm">
+    <h2 id="sheetTitle">SETTINGS</h2>
+    <label for="sUrl">Google Apps Script のウェブアプリURL
+      <input id="sUrl" type="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </label>
+    <label for="sKey">合言葉（Code.gs の KEY）
+      <input id="sKey" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </label>
+    <div class="row2">
+      <label for="sWalk">家から赤塚山まで（分）<input id="sWalk" type="number" min="0" max="60" inputmode="numeric"></label>
+      <label for="sXfer">阪神御影の乗り換え（分）<input id="sXfer" type="number" min="0" max="30" inputmode="numeric"></label>
+    </div>
+    <p>設定はこのiPadのブラウザにだけ保存されます。ページ自体には書き込まれません。</p>
+    <div class="acts">
+      <button class="btn" type="button" id="sCancel">閉じる</button>
+      <button class="btn primary" type="submit">保存</button>
+    </div>
+  </form>
+</div>
+
+<script>
+const BUS = {"walkMinutes":5,"transferMinutes":2,"legs":[{"from":"赤塚山","to":"阪神御影","routes":[{"line":"19","minutes":19,"times":{"weekday":[{"t":"06:43"},{"t":"06:58"},{"t":"07:15"},{"t":"07:29"},{"t":"07:37"},{"t":"07:47","note":"学校先行"},{"t":"08:10","note":"学校先行"},{"t":"08:18","note":"学校先行"},{"t":"08:23","note":"学校先行"},{"t":"08:26","note":"学校先行"},{"t":"08:30","note":"学校先行"},{"t":"08:33","note":"学校先行"},{"t":"08:49","note":"学校先行"},{"t":"09:06"},{"t":"09:21"},{"t":"09:36"},{"t":"10:06"},{"t":"10:21"},{"t":"10:36"},{"t":"11:06"},{"t":"11:21"},{"t":"11:36"},{"t":"12:06"},{"t":"12:21"},{"t":"12:51"},{"t":"13:21"},{"t":"13:51"},{"t":"14:21"},{"t":"14:51"},{"t":"15:21"},{"t":"15:41"},{"t":"16:01"},{"t":"16:21"},{"t":"16:36"},{"t":"16:51"},{"t":"17:06"},{"t":"17:21"},{"t":"17:36"},{"t":"17:51"},{"t":"18:06"},{"t":"18:21"},{"t":"18:36"},{"t":"18:51"},{"t":"19:06"},{"t":"19:21"},{"t":"19:36"},{"t":"19:51"},{"t":"20:06"},{"t":"20:26"},{"t":"20:46"},{"t":"21:06"},{"t":"21:26"},{"t":"21:46"},{"t":"22:06"},{"t":"22:26"},{"t":"22:46"},{"t":"23:06"}],"saturday":[{"t":"06:47"},{"t":"06:58"},{"t":"07:09"},{"t":"07:19"},{"t":"07:29"},{"t":"07:46"},{"t":"07:58"},{"t":"08:22"},{"t":"08:34"},{"t":"09:04"},{"t":"09:19"},{"t":"09:49"},{"t":"10:04"},{"t":"10:34"},{"t":"10:49"},{"t":"11:18"},{"t":"11:33"},{"t":"11:48"},{"t":"12:18"},{"t":"12:33"},{"t":"12:48"},{"t":"13:18"},{"t":"13:33"},{"t":"13:48"},{"t":"14:17"},{"t":"14:32"},{"t":"14:47"},{"t":"15:17"},{"t":"15:32"},{"t":"15:47"},{"t":"16:14"},{"t":"16:38"},{"t":"17:02"},{"t":"17:12"},{"t":"17:32"},{"t":"17:42"},{"t":"18:02"},{"t":"18:12"},{"t":"18:22"},{"t":"18:46"},{"t":"18:58"},{"t":"19:26"},{"t":"19:39"},{"t":"19:53"},{"t":"20:07"},{"t":"20:21"},{"t":"20:37"},{"t":"20:53"},{"t":"21:13"},{"t":"21:33"},{"t":"21:53"},{"t":"22:15"},{"t":"22:36"}],"holiday":[{"t":"06:47"},{"t":"06:58"},{"t":"07:09"},{"t":"07:19"},{"t":"07:29"},{"t":"07:46"},{"t":"07:58"},{"t":"08:22"},{"t":"08:34"},{"t":"09:04"},{"t":"09:19"},{"t":"09:49"},{"t":"10:04"},{"t":"10:34"},{"t":"10:49"},{"t":"11:18"},{"t":"11:33"},{"t":"11:48"},{"t":"12:18"},{"t":"12:33"},{"t":"12:48"},{"t":"13:18"},{"t":"13:33"},{"t":"13:48"},{"t":"14:17"},{"t":"14:32"},{"t":"14:47"},{"t":"15:17"},{"t":"15:32"},{"t":"15:47"},{"t":"16:14"},{"t":"16:38"},{"t":"17:02"},{"t":"17:12"},{"t":"17:32"},{"t":"17:42"},{"t":"18:02"},{"t":"18:12"},{"t":"18:22"},{"t":"18:46"},{"t":"18:58"},{"t":"19:26"},{"t":"19:39"},{"t":"19:53"},{"t":"20:07"},{"t":"20:21"},{"t":"20:37"},{"t":"20:53"},{"t":"21:13"},{"t":"21:33"},{"t":"21:53"},{"t":"22:15"},{"t":"22:36"}]}},{"line":"39","minutes":25,"times":{"weekday":[{"t":"07:25"},{"t":"07:55","note":"学校先行"},{"t":"08:42","note":"学校先行"},{"t":"09:09"},{"t":"09:51"},{"t":"10:51"},{"t":"11:51"},{"t":"12:41"},{"t":"13:41"},{"t":"14:41"},{"t":"15:31"},{"t":"16:11"},{"t":"16:43"},{"t":"17:13"},{"t":"17:43"},{"t":"18:13"},{"t":"18:43"},{"t":"19:13"},{"t":"20:16"},{"t":"20:36"}],"saturday":[{"t":"07:38"},{"t":"08:10"},{"t":"08:49"},{"t":"09:34"},{"t":"10:19"},{"t":"11:04"},{"t":"12:03"},{"t":"13:03"},{"t":"14:02"},{"t":"15:02"},{"t":"16:02"},{"t":"16:26"},{"t":"16:50"},{"t":"17:22"},{"t":"17:52"},{"t":"18:34"},{"t":"19:12"}],"holiday":[{"t":"07:38"},{"t":"08:10"},{"t":"08:49"},{"t":"09:34"},{"t":"10:19"},{"t":"11:04"},{"t":"12:03"},{"t":"13:03"},{"t":"14:02"},{"t":"15:02"},{"t":"16:02"},{"t":"16:26"},{"t":"16:50"},{"t":"17:22"},{"t":"17:52"},{"t":"18:34"},{"t":"19:12"}]}}]},{"from":"阪神御影","to":"国際文化学研究科前","routes":[{"line":"16","minutes":24,"times":{"weekday":[{"t":"06:20"},{"t":"06:32"},{"t":"06:44"},{"t":"06:56"},{"t":"07:08"},{"t":"07:20"},{"t":"07:30"},{"t":"07:40"},{"t":"07:50"},{"t":"08:00"},{"t":"08:10"},{"t":"08:20"},{"t":"08:30"},{"t":"08:40"},{"t":"08:50"},{"t":"09:00"},{"t":"09:12"},{"t":"09:24"},{"t":"09:36"},{"t":"09:48"},{"t":"10:00"},{"t":"10:12"},{"t":"10:24"},{"t":"10:40"},{"t":"10:56"},{"t":"11:12"},{"t":"11:36"},{"t":"12:00"},{"t":"12:24"},{"t":"12:48"},{"t":"13:12"},{"t":"13:36"},{"t":"14:00"},{"t":"14:24"},{"t":"14:48"},{"t":"15:12"},{"t":"15:36"},{"t":"16:00"},{"t":"16:15"},{"t":"16:30"},{"t":"16:45"},{"t":"17:00"},{"t":"17:15"},{"t":"17:30"},{"t":"17:45"},{"t":"18:00"},{"t":"18:20"},{"t":"18:40"},{"t":"19:00"},{"t":"19:20"},{"t":"19:45"},{"t":"20:00"},{"t":"20:15"},{"t":"20:30"},{"t":"20:45"},{"t":"21:00"},{"t":"21:20"},{"t":"21:40"},{"t":"22:00"},{"t":"22:20"},{"t":"22:40"},{"t":"23:00"}],"saturday":[{"t":"06:25"},{"t":"06:50"},{"t":"07:10"},{"t":"07:30"},{"t":"08:00"},{"t":"08:12"},{"t":"08:32"},{"t":"09:00"},{"t":"09:36"},{"t":"10:12"},{"t":"10:48"},{"t":"11:24"},{"t":"12:00"},{"t":"12:36"},{"t":"13:12"},{"t":"13:48"},{"t":"14:24"},{"t":"15:00"},{"t":"15:36"},{"t":"16:12"},{"t":"16:48"},{"t":"17:24"},{"t":"18:00"},{"t":"18:30"},{"t":"19:00"},{"t":"19:25"},{"t":"19:50"},{"t":"20:15"},{"t":"20:40"},{"t":"21:05"},{"t":"21:30"},{"t":"22:00"},{"t":"22:30"}],"holiday":[{"t":"06:25"},{"t":"06:50"},{"t":"07:10"},{"t":"07:30"},{"t":"08:00"},{"t":"08:12"},{"t":"08:32"},{"t":"09:00"},{"t":"09:36"},{"t":"10:12"},{"t":"10:48"},{"t":"11:24"},{"t":"12:00"},{"t":"12:36"},{"t":"13:12"},{"t":"13:48"},{"t":"14:24"},{"t":"15:00"},{"t":"15:36"},{"t":"16:12"},{"t":"16:48"},{"t":"17:24"},{"t":"18:00"},{"t":"18:30"},{"t":"19:00"},{"t":"19:25"},{"t":"19:50"},{"t":"20:15"},{"t":"20:40"},{"t":"21:05"},{"t":"21:30"},{"t":"22:00"},{"t":"22:30"}]}}]}]};
+(() => {
+  const $ = id => document.getElementById(id);
+  const pad = n => String(n).padStart(2, "0");
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+  const store = {
+    get(k, d){ try{ const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); }catch(e){ return d; } },
+    set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+  };
+  const WDJ = ["日","月","火","水","木","金","土"];
+  const ymdKey = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const hm = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  function toast(msg){ const t = $("toast"); t.textContent = msg; t.classList.add("go"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("go"), 4000); }
+
+  /* ---------- settings ---------- */
+  let S = Object.assign({ url: "", key: "", walk: BUS.walkMinutes, xfer: BUS.transferMinutes }, store.get("hud-settings", {}));
+  function openSheet(){
+    $("sUrl").value = S.url; $("sKey").value = S.key; $("sWalk").value = S.walk; $("sXfer").value = S.xfer;
+    $("sheet").classList.add("open"); $("sUrl").focus();
+  }
+  function closeSheet(){ $("sheet").classList.remove("open"); }
+  $("setBtn").addEventListener("click", openSheet);
+  $("sCancel").addEventListener("click", closeSheet);
+  $("setForm").addEventListener("submit", e => {
+    e.preventDefault();
+    S = { url: $("sUrl").value.trim(), key: $("sKey").value.trim(), walk: Math.max(0, Number($("sWalk").value) || 0), xfer: Math.max(0, Number($("sXfer").value) || 0) };
+    store.set("hud-settings", S); closeSheet(); busSig = ""; loadCal();
+  });
+
+  /* ---------- clock ---------- */
+  const WD = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
+  const boot = Date.now();
+  function setBar(id, p){ $(id+"P").textContent = (p*100).toFixed(1)+"%"; $(id+"B").style.width = (p*100)+"%"; }
+  function tick(){
+    const d = new Date();
+    $("hh").textContent = pad(d.getHours()); $("mm").textContent = pad(d.getMinutes()); $("ss").textContent = pad(d.getSeconds());
+    $("ymd").textContent = `${d.getFullYear()}.${pad(d.getMonth()+1)}.${pad(d.getDate())}`;
+    $("wd").textContent = WD[d.getDay()];
+    const start = new Date(d.getFullYear(),0,1);
+    const doy = Math.floor((new Date(d.getFullYear(),d.getMonth(),d.getDate()) - start)/864e5)+1;
+    $("jp").textContent = `${WDJ[d.getDay()]}曜日 · ${doy}日目`;
+    const dayP = (d - new Date(d.getFullYear(),d.getMonth(),d.getDate()))/864e5;
+    setBar("day", dayP);
+    setBar("week", (((d.getDay()+6)%7) + dayP)/7);
+    const up = Math.floor((Date.now()-boot)/1000);
+    $("uptime").textContent = `${pad(Math.floor(up/3600))}:${pad(Math.floor(up/60)%60)}:${pad(up%60)}`;
+    const off = -d.getTimezoneOffset();
+    $("tz").textContent = `UTC${off>=0?"+":"-"}${pad(Math.floor(Math.abs(off)/60))}:${pad(Math.abs(off)%60)}`;
+    timerTick(); renderBus(); renderCal(); renderUsage();
+  }
+
+  /* ---------- timer ---------- */
+  const C = 2*Math.PI*86, prog = $("prog");
+  prog.style.strokeDasharray = C;
+  const todayKey = "hud-count-" + new Date().toDateString();
+  const T = { focus:25, brk:5, mode:"focus", running:false, endAt:0, remaining:25*60*1000, count:store.get(todayKey,0) };
+  const total = () => (T.mode === "focus" ? T.focus : T.brk)*60*1000;
+  function render(){
+    const r = Math.max(0, T.remaining), s = Math.ceil(r/1000);
+    $("remain").textContent = `${pad(Math.floor(s/60))}:${pad(s%60)}`;
+    prog.style.strokeDashoffset = C * (1 - r/total());
+    $("mode").textContent = T.mode === "focus" ? "FOCUS" : "BREAK";
+    $("timer").classList.toggle("break", T.mode !== "focus");
+    $("startBtn").textContent = T.running ? "一時停止" : (r < total() ? "再開" : "開始");
+    $("count").textContent = `今日 ${T.count} 回`;
+  }
+  function timerTick(){ if (!T.running) return; T.remaining = T.endAt - Date.now(); if (T.remaining <= 0) finish(); else render(); }
+  let actx = null;
+  function beep(){
+    try{
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      [0,.22,.44].forEach((t,i) => {
+        const o = actx.createOscillator(), g = actx.createGain();
+        o.frequency.value = i === 2 ? 1320 : 880;
+        g.gain.setValueAtTime(.0001, actx.currentTime+t);
+        g.gain.exponentialRampToValueAtTime(.18, actx.currentTime+t+.02);
+        g.gain.exponentialRampToValueAtTime(.0001, actx.currentTime+t+.18);
+        o.connect(g).connect(actx.destination); o.start(actx.currentTime+t); o.stop(actx.currentTime+t+.2);
+      });
+    }catch(e){}
+  }
+  function flash(){ const f = $("flash"); f.classList.add("go"); setTimeout(()=>f.classList.remove("go"), 900); }
+  function switchMode(next){ T.mode = next; T.remaining = total(); }
+  function finish(){
+    T.running = false;
+    if (T.mode === "focus"){ T.count++; store.set(todayKey, T.count); switchMode("brk"); } else switchMode("focus");
+    beep(); flash(); render();
+  }
+  $("startBtn").addEventListener("click", () => {
+    try{ actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === "suspended") actx.resume(); }catch(e){}
+    if (T.running){ T.running = false; T.remaining = T.endAt - Date.now(); }
+    else { T.running = true; T.endAt = Date.now() + T.remaining; }
+    render();
+  });
+  $("resetBtn").addEventListener("click", () => { T.running = false; switchMode("focus"); render(); });
+  $("skipBtn").addEventListener("click", () => { T.running = false; switchMode(T.mode === "focus" ? "brk" : "focus"); render(); });
+
+  /* ---------- weather (Open-Meteo) ---------- */
+  const WX = { lat: 34.736, lon: 135.262, label: "東灘区" };
+  const WMO = c =>
+    c === 0 ? "快晴" : c === 1 ? "晴れ" : c === 2 ? "晴れ時々くもり" : c === 3 ? "くもり" :
+    c <= 48 ? "霧" : c <= 55 ? "霧雨" : c <= 57 ? "着氷性の霧雨" : c <= 63 ? "雨" : c <= 65 ? "強い雨" :
+    c <= 67 ? "着氷性の雨" : c <= 75 ? "雪" : c === 77 ? "霧雪" : c <= 81 ? "にわか雨" : c === 82 ? "激しいにわか雨" :
+    c <= 86 ? "にわか雪" : "雷雨";
+  function renderWeather(w){
+    if (!w) return;
+    $("wxT").innerHTML = `${Math.round(w.now.temp)}<small>°C</small>`;
+    $("wxD").textContent = `${WX.label} · ${WMO(w.now.code)}`;
+    $("wxF").textContent = `体感 ${Math.round(w.now.feels)}°C · 日の入 ${w.today.sunset}`;
+    const wet = w.today.pop >= 50;
+    $("wxDay").innerHTML =
+      `<span>今日 ${esc(WMO(w.today.code))}</span>` +
+      `<span>最高 <b class="hi">${Math.round(w.today.max)}°</b> 最低 <b class="lo">${Math.round(w.today.min)}°</b></span>` +
+      `<span class="rain${wet ? " wet" : ""}">降水 <b>${w.today.pop ?? "-"}%</b>${wet ? " 傘あり" : ""}</span>` +
+      `<span>明日 ${esc(WMO(w.tomorrow.code))} <b>${Math.round(w.tomorrow.max)}°/${Math.round(w.tomorrow.min)}°</b> ${w.tomorrow.pop ?? "-"}%</span>`;
+    $("hours").innerHTML = w.hours.map(h => {
+      const p = h.pop ?? 0;
+      return `<div class="h"><span class="pv">${p}%</span><div class="pop"><i class="${p >= 50 ? "wet" : ""}" style="height:${Math.max(2, p)}%"></i></div><span class="tv">${Math.round(h.temp)}°</span><span class="hl">${h.h}時</span></div>`;
+    }).join("");
+  }
+  async function loadWeather(){
+    try{
+      const u = `https://api.open-meteo.com/v1/forecast?latitude=${WX.lat}&longitude=${WX.lon}`
+        + "&current=temperature_2m,apparent_temperature,weather_code"
+        + "&hourly=temperature_2m,precipitation_probability,weather_code"
+        + "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunset"
+        + "&timezone=Asia%2FTokyo&forecast_days=2";
+      const res = await fetch(u, { cache: "no-store" });
+      if (!res.ok) throw new Error(res.status);
+      const j = await res.json();
+      const d = new Date(), nowKey = `${ymdKey(d)}T${pad(d.getHours())}`;
+      const s = Math.max(0, j.hourly.time.findIndex(t => t.slice(0, 13) >= nowKey));
+      const w = {
+        now: { temp: j.current.temperature_2m, feels: j.current.apparent_temperature, code: j.current.weather_code },
+        today: { code: j.daily.weather_code[0], max: j.daily.temperature_2m_max[0], min: j.daily.temperature_2m_min[0], pop: j.daily.precipitation_probability_max[0], sunset: j.daily.sunset[0].slice(11) },
+        tomorrow: { code: j.daily.weather_code[1], max: j.daily.temperature_2m_max[1], min: j.daily.temperature_2m_min[1], pop: j.daily.precipitation_probability_max[1] },
+        hours: j.hourly.time.slice(s, s + 12).map((t, i) => ({ h: Number(t.slice(11, 13)), temp: j.hourly.temperature_2m[s+i], pop: j.hourly.precipitation_probability[s+i] }))
+      };
+      store.set("hud-wx", w); $("wxErr").textContent = ""; renderWeather(w);
+    }catch(e){
+      renderWeather(store.get("hud-wx", null));
+      $("wxErr").textContent = "天気を更新できません（ネット接続を確認）";
+    }
+  }
+
+  /* ---------- holidays ---------- */
+  let holidays = store.get("hud-holidays", {});
+  async function loadHolidays(){
+    try{
+      const res = await fetch("https://holidays-jp.github.io/api/v1/date.json");
+      if (res.ok){ holidays = await res.json(); store.set("hud-holidays", holidays); busSig = ""; }
+    }catch(e){}
+  }
+  function dayType(d){
+    const key = ymdKey(d), m = d.getMonth()+1, day = d.getDate();
+    if (holidays[key] || (m === 12 && day >= 30) || (m === 1 && day <= 3)) return { type: "holiday", label: holidays[key] ? "祝日" : "年末年始" };
+    if (d.getDay() === 0) return { type: "holiday", label: "日曜" };
+    if (d.getDay() === 6) return { type: "saturday", label: "土曜" };
+    return { type: "weekday", label: "平日" };
+  }
+
+  /* ---------- bus ---------- */
+  const toMin = s => { const [h, m] = s.split(":").map(Number); return h*60 + m; };
+  const fmtMin = m => `${pad(Math.floor(m/60) % 24)}:${pad(m % 60)}`;
+  function departures(leg, type){
+    const out = [];
+    leg.routes.forEach(r => (r.times[type] || []).forEach(x => out.push({ line: r.line, dep: toMin(x.t), arr: toMin(x.t) + r.minutes, note: x.note || "" })));
+    return out.sort((a, b) => a.dep - b.dep);
+  }
+  function plan(type, fromMin){
+    const [l1, l2] = BUS.legs, second = departures(l2, type);
+    return departures(l1, type).filter(d => d.dep >= fromMin).map(d => {
+      const c = second.find(s => s.dep >= d.arr + S.xfer);
+      return { ...d, conn: c || null, goal: c ? c.arr : null };
+    });
+  }
+  const lineTag = l => `<span class="line l${esc(l)}">${esc(l)}</span>`;
+  function cdText(sec){
+    if (sec < 0) return "発車済み";
+    const m = Math.floor(sec/60), s = sec % 60;
+    return m >= 60 ? `${Math.floor(m/60)}時間${pad(m%60)}分` : `${m}:${pad(s)}`;
+  }
+  let busSig = "";
+  function renderBus(){
+    const now = new Date(), nowMin = now.getHours()*60 + now.getMinutes(), nowSec = nowMin*60 + now.getSeconds();
+    const today = dayType(now), tomorrow = dayType(new Date(now.getTime() + 864e5));
+    $("busDay").textContent = `${today.label}ダイヤ`;
+    const trips = plan(today.type, nowSec/60), body = $("busBody");
+    if (!trips.length){
+      const tm = plan(tomorrow.type, 0)[0], sig = "end" + (tm && tm.dep) + today.type;
+      if (sig !== busSig){
+        busSig = sig;
+        body.innerHTML = `<div class="busEmpty">今日の赤塚山発は終了しました。<br>明日（${esc(tomorrow.label)}）の始発は <b class="num">${tm ? fmtMin(tm.dep) : "--:--"}</b> ${tm ? lineTag(tm.line) : ""}</div>`;
+      }
+    } else {
+      const n = trips[0], sig = trips.slice(0, 5).map(t => t.line + t.dep + (t.conn && t.conn.dep)).join();
+      if (sig !== busSig){
+        busSig = sig;
+        const rest = trips.slice(1, 5).map(t => `<li><span class="d">${fmtMin(t.dep)}</span>${lineTag(t.line)}<span class="r">御影 <b>${fmtMin(t.arr)}</b> → ${t.conn ? `16系統 <b>${fmtMin(t.conn.dep)}</b>` : "接続なし"}${t.note ? ` <span class="tag">${esc(t.note)}</span>` : ""}</span><span class="a">${t.goal ? `<b>${fmtMin(t.goal)}</b>着 · ${t.goal - t.dep}分` : "—"}</span></li>`).join("");
+        body.innerHTML = `
+          <div class="next">
+            <div class="when"><span class="dep">${fmtMin(n.dep)}</span>${lineTag(n.line)}${n.note ? `<span class="tag">${esc(n.note)}・乗り場注意</span>` : ""}</div>
+            <div class="cd"><div class="big" id="nCd">--:--</div><div class="sm" id="nLeave"></div></div>
+            <div class="chain">
+              <span>赤塚山 <b>${fmtMin(n.dep)}</b></span><span class="arrow">→</span>
+              <span>阪神御影 <b>${fmtMin(n.arr)}</b></span><span class="arrow">→</span>
+              ${n.conn ? `${lineTag("16")}<span><b>${fmtMin(n.conn.dep)}</b>発</span><span class="arrow">→</span><span class="goal">国際文化 <b>${fmtMin(n.goal)}</b>着</span><span>（約${n.goal - n.dep}分）</span>` : `<span>16系統の接続なし</span>`}
+            </div>
+          </div>
+          <ul class="trips">${rest}</ul>`;
+      }
+      const left = n.dep*60 - nowSec, leaveLeft = left - S.walk*60;
+      const el = document.querySelector(".next .cd");
+      if (el){
+        el.style.setProperty("--c", leaveLeft < 0 ? "var(--red)" : leaveLeft < 300 ? "var(--amber)" : "var(--ice)");
+        $("nCd").textContent = cdText(left);
+        $("nLeave").innerHTML = leaveLeft >= 0 ? `家を出るまで <b>${cdText(leaveLeft)}</b>（徒歩${S.walk}分）` : "今出ても間に合わない可能性";
+      }
+    }
+    const l2 = departures(BUS.legs[1], today.type).filter(d => d.dep*60 >= nowSec).slice(0, 4), sig2 = l2.map(d => d.dep).join() + today.type;
+    if ($("leg2").dataset.sig !== sig2){
+      $("leg2").dataset.sig = sig2;
+      $("leg2").innerHTML = l2.length
+        ? `<span>阪神御影発</span>${lineTag("16")}${l2.map(d => `<b>${fmtMin(d.dep)}</b>`).join("")}<span>→ 国際文化まで約${BUS.legs[1].routes[0].minutes}分</span>`
+        : `<span>阪神御影発 16系統は今日の運行を終了</span>`;
+    }
+  }
+
+  /* ---------- Google Calendar ---------- */
+  let cal = store.get("hud-cal", null), calErr = "";
+  function setLink(state, txt){
+    $("link").classList.toggle("off", state !== "ok");
+    $("linkTxt").textContent = txt;
+  }
+  async function loadCal(){
+    if (!S.url || !S.key){ cal = null; calErr = "setup"; setLink("off", "カレンダー未設定"); calSig = ""; renderCal(); return; }
+    try{
+      const res = await fetch(`${S.url}?k=${encodeURIComponent(S.key)}&days=2&t=${Date.now()}`, { cache: "no-store", redirect: "follow" });
+      const j = await res.json();
+      if (j.error) throw new Error(j.error);
+      cal = j; calErr = ""; store.set("hud-cal", j); setLink("ok", "オンライン");
+    }catch(e){
+      calErr = /合言葉/.test(e.message) ? e.message : "カレンダーを取得できません（URLとネット接続を確認）";
+      setLink("off", cal ? "オフライン（前回の予定を表示中）" : "オフライン");
+    }
+    calSig = ""; renderCal();
+  }
+  const fmtCd = ms => {
+    const m = Math.ceil(ms/60000);
+    if (m >= 60*24) return `${Math.floor(m/1440)}日後`;
+    if (m >= 60) return `${Math.floor(m/60)}時間${pad(m%60)}分`;
+    return `${m}分`;
+  };
+  let calSig = "";
+  function renderCal(){
+    const now = Date.now();
+    if (calErr === "setup" && !cal){
+      if (calSig !== "setup"){
+        calSig = "setup";
+        $("calFocus").innerHTML = ""; $("allday").innerHTML = "";
+        $("evs").innerHTML = `<li class="calEmpty">Googleカレンダーをつなぐには、Code.gs をGoogle Apps Scriptに置いてウェブアプリとして公開し、そのURLと合言葉を設定に入れてください。<br><button class="btn" type="button" id="openSet2">設定を開く</button></li>`;
+        $("openSet2").addEventListener("click", openSheet);
+      }
+      $("calSrc").textContent = "未設定";
+      return;
+    }
+    if (!cal) return;
+    const ago = Math.round((now - cal.at)/60000);
+    $("calSrc").textContent = (calErr ? "前回取得 " : "更新 ") + (ago < 1 ? "たった今" : `${ago}分前`);
+    const d0 = new Date(); d0.setHours(0,0,0,0);
+    const t0 = d0.getTime(), t1 = t0 + 864e5, t2 = t1 + 864e5;
+    const evs = cal.events.filter(e => e.end > t0 && e.start < t2);
+    const timed = evs.filter(e => !e.allDay);
+    const cur = timed.filter(e => e.start <= now && e.end > now);
+    const next = timed.find(e => e.start > now);
+
+    // 進行中・次の予定（毎秒）
+    let html = "";
+    if (cur.length){
+      const e = cur[0], p = (now - e.start)/(e.end - e.start);
+      html += `<div class="focusEv"><span class="k now">NOW · 進行中</span><span class="ti">${esc(e.title)}</span><span class="cd" style="--c:var(--ice)">${fmtCd(e.end - now)}<small>終了まで</small></span><span class="wh"><b>${hm(new Date(e.start))}–${hm(new Date(e.end))}</b>${e.location ? " · " + esc(e.location) : ""}</span><div class="bar prog"><i style="width:${(p*100).toFixed(1)}%"></i></div></div>`;
+    }
+    if (next && (!cur.length || next.start - now < 3*3600e3)){
+      const left = next.start - now, c = left < 10*60e3 ? "var(--red)" : left < 30*60e3 ? "var(--amber)" : "var(--ice)";
+      const day = next.start >= t1 ? "明日 " : "";
+      html += `<div class="focusEv"><span class="k">NEXT · 次の予定</span><span class="ti">${esc(next.title)}</span><span class="cd" style="--c:${c}">${fmtCd(left)}<small>開始まで</small></span><span class="wh"><b>${day}${hm(new Date(next.start))}–${hm(new Date(next.end))}</b>${next.location ? " · " + esc(next.location) : ""}</span></div>`;
+    }
+    if (!html) html = `<div class="focusEv"><span class="k now">CLEAR</span><span class="ti">今日と明日の予定はもうありません</span></div>`;
+    $("calFocus").innerHTML = html;
+
+    // 一覧（分が変わったときだけ描き直す）
+    const sig = Math.floor(now/60000) + ":" + cal.at;
+    if (sig === calSig) return;
+    calSig = sig;
+    const ad = evs.filter(e => e.allDay && e.start < t1);
+    $("allday").innerHTML = ad.map(e => `<span style="--ec:${esc(e.color || "")}">終日 · ${esc(e.title)}</span>`).join("");
+    const li = e => {
+      const cls = e.end <= now ? "past" : (e.start <= now ? "cur" : "");
+      return `<li class="${cls}"><span class="tm" style="--ec:${esc(e.color || "")}">${hm(new Date(e.start))}–${hm(new Date(e.end))}</span><span class="bd"><span>${esc(e.title)}</span>${e.location || e.calendar ? `<small>${esc([e.location, e.calendar].filter(Boolean).join(" · "))}</small>` : ""}</span></li>`;
+    };
+    const today = timed.filter(e => e.start < t1);
+    const tmr = evs.filter(e => e.start >= t1);
+    let list = today.length ? today.map(li).join("") : `<li class="calEmpty">今日の時間指定の予定はありません</li>`;
+    if (tmr.length){
+      const tmd = new Date(t1);
+      list += `<li class="sep">TOMORROW · ${tmd.getMonth()+1}/${tmd.getDate()}(${WDJ[tmd.getDay()]})</li>` +
+        tmr.map(e => e.allDay ? `<li><span class="tm" style="--ec:${esc(e.color || "")}">終日</span><span class="bd"><span>${esc(e.title)}</span></span></li>` : li(e)).join("");
+    }
+    if (calErr) list += `<li class="calEmpty" style="color:var(--amber)">${esc(calErr)}</li>`;
+    $("evs").innerHTML = list;
+  }
+
+
+  /* ---------- Claude usage（PCのClaude Code → Apps Script 経由） ---------- */
+  const WIN = { u5: 5*3600, u7: 7*86400 };
+  const ucolor = p => p >= 85 ? "var(--red)" : p >= 60 ? "var(--amber)" : "var(--ice)";
+  function uleft(sec){
+    if (sec <= 0) return "リセット済み";
+    const d = Math.floor(sec/86400), h = Math.floor(sec/3600)%24, m = Math.floor(sec/60)%60;
+    return d ? `あと ${d}日${h}時間` : `あと ${h}:${pad(m)}`;
+  }
+  function renderWin(id, w){
+    const el = $(id);
+    const pct = el.querySelector(".pct"), bar = el.querySelector(".bar i"), pace = el.querySelector(".pace");
+    if (!w){ pct.innerHTML = "--<small>%</small>"; bar.style.width = "0"; pace.hidden = true; el.querySelector(".reset").textContent = "—"; el.querySelector(".left").textContent = ""; return; }
+    const rem = w.resets_at ? w.resets_at - Date.now()/1000 : null;
+    // 最後に受け取った後でリセット時刻を過ぎていれば、その枠は0%に戻っている
+    const p = rem !== null && rem <= 0 ? 0 : Math.max(0, Math.min(100, w.used_percentage));
+    el.style.setProperty("--c", ucolor(p));
+    pct.innerHTML = `${Math.round(p)}<small>%</small>`;
+    bar.style.width = p + "%";
+    if (rem !== null && rem > 0){
+      const r = new Date(w.resets_at*1000);
+      el.querySelector(".reset").textContent = id === "u5"
+        ? `リセット ${pad(r.getHours())}:${pad(r.getMinutes())}`
+        : `リセット ${r.getMonth()+1}/${r.getDate()}(${WDJ[r.getDay()]})`;
+      el.querySelector(".left").textContent = uleft(rem);
+      pace.hidden = false; pace.style.left = `calc(${Math.max(0, Math.min(1, 1 - rem/WIN[id]))*100}% - 1px)`;
+    } else {
+      el.querySelector(".reset").textContent = rem !== null ? "リセット済み" : "リセット --";
+      el.querySelector(".left").textContent = "";
+      pace.hidden = true;
+    }
+  }
+  function renderUsage(){
+    const u = cal && cal.usage;
+    if (!u){
+      renderWin("u5", null); renderWin("u7", null);
+      $("uSrc").textContent = "データなし";
+      $("uNote").textContent = cal ? "PCの使用量送信を設定すると表示されます" : "";
+      return;
+    }
+    renderWin("u5", u.five_hour); renderWin("u7", u.seven_day);
+    const ago = Math.max(0, Math.round((Date.now() - u.at)/60000));
+    const src = u.source === "auto" ? "PC自動" : "Claude Code";
+    $("uSrc").textContent = `${src} · ${ago < 1 ? "たった今" : ago < 60 ? ago + "分前" : ago < 1440 ? Math.floor(ago/60) + "時間前" : Math.floor(ago/1440) + "日前"}`;
+    $("uNote").textContent = ago >= 15 ? "更新が止まっています（PCがスリープ中か電源が切れている可能性）" : "";
+  }
+
+  /* ---------- fullscreen + wake lock ---------- */
+  let wl = null;
+  async function keepAwake(){ try{ if (navigator.wakeLock) wl = await navigator.wakeLock.request("screen"); }catch(e){} }
+  $("fs").addEventListener("click", async () => {
+    try{
+      const el = document.documentElement;
+      if (!document.fullscreenElement && el.requestFullscreen) await el.requestFullscreen();
+      else if (document.fullscreenElement) await document.exitFullscreen();
+      else throw 0;
+    }catch(e){ toast("全画面にできません。共有→「ホーム画面に追加」から開いてください"); }
+    keepAwake();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible"){ loadCal(); loadWeather(); if (wl) keepAwake(); }
+  });
+
+  /* ---------- background ---------- */
+  const cv = $("bg"), cx = cv.getContext("2d");
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let W, H, DPR, nodes = [];
+  function size(){
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = cv.width = innerWidth*DPR; H = cv.height = innerHeight*DPR;
+    nodes = Array.from({length: 26}, () => ({ x: Math.random()*W, y: Math.random()*H, vx: (Math.random()-.5)*.12*DPR, vy: (Math.random()-.5)*.12*DPR }));
+  }
+  function draw(t){
+    cx.clearRect(0,0,W,H);
+    const g = 44*DPR;
+    cx.fillStyle = "rgba(127,227,255,.10)";
+    for (let x = g/2; x < W; x += g) for (let y = g/2; y < H; y += g) cx.fillRect(x, y, DPR, DPR);
+    const sy = ((t/9000) % 1) * H;
+    const grd = cx.createLinearGradient(0, sy-120*DPR, 0, sy);
+    grd.addColorStop(0, "rgba(127,227,255,0)"); grd.addColorStop(1, "rgba(127,227,255,.06)");
+    cx.fillStyle = grd; cx.fillRect(0, sy-120*DPR, W, 120*DPR);
+    cx.fillStyle = "rgba(127,227,255,.25)"; cx.fillRect(0, sy, W, DPR);
+    nodes.forEach(n => { n.x += n.vx; n.y += n.vy; if (n.x<0||n.x>W) n.vx*=-1; if (n.y<0||n.y>H) n.vy*=-1; });
+    for (let i=0;i<nodes.length;i++) for (let j=i+1;j<nodes.length;j++){
+      const a = nodes[i], b = nodes[j], dd = Math.hypot(a.x-b.x, a.y-b.y);
+      if (dd < 220*DPR){ cx.strokeStyle = `rgba(127,227,255,${.08*(1-dd/(220*DPR))})`; cx.lineWidth = DPR; cx.beginPath(); cx.moveTo(a.x,a.y); cx.lineTo(b.x,b.y); cx.stroke(); }
+    }
+    cx.fillStyle = "rgba(127,227,255,.5)";
+    nodes.forEach(n => cx.fillRect(n.x-DPR, n.y-DPR, 2*DPR, 2*DPR));
+    if (!reduce) setTimeout(() => requestAnimationFrame(draw), 33);
+  }
+  addEventListener("resize", () => { size(); if (reduce) draw(0); });
+
+  size(); draw(0); render();
+  if (cal) renderCal();
+  tick(); setInterval(tick, 500);
+  loadHolidays(); loadWeather(); loadCal();
+  setInterval(loadCal, 5*60000);
+  setInterval(loadWeather, 15*60000);
+  setInterval(loadHolidays, 24*3600e3);
+})();
+</script>
+</body>
+</html>
